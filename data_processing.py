@@ -11,20 +11,6 @@ import torch
 from torch.utils.data import TensorDataset, DataLoader
 from sklearn.model_selection import GroupShuffleSplit
 
-genres = ['blues', 'classical', 'country', 'disco', 'hiphop', 'jazz', 'metal', 'pop', 'reggae', 'rock']
-genre_to_index = {genre: idx for idx, genre in enumerate(genres)}
-
-audio_path = Path("genres_original")
-csv_path = Path("features_3_sec.csv")
-output_dir = Path("processed_data")
-output_dir.mkdir(parents=True, exist_ok=True)
-
-audio_duration = 30.0
-clip_duration = 3.0
-num_clips = 10 # Number of clips to extract from each audio file
-
-np.random.seed(30) # For reproducibility
-torch.manual_seed(30)
 
 def find_invalid_audio_files(audio_path: Path, genres: list[str]) -> set[str]:
     "Checks every <genre>.<number>.wav audio file for 30s duration and loadability. Returns a set of 5-digit invalid audio file numbers from any genre so they can be dropped from all the genres for consistency."
@@ -53,8 +39,6 @@ def find_invalid_audio_files(audio_path: Path, genres: list[str]) -> set[str]:
     
     return invalid_files
 
-bad_audio = find_invalid_audio_files(audio_path, genres)
-valid_audio = [f"{i:05d}" for i in range(100) if f"{i:05d}" not in bad_audio] # all the valid audio file numbers (5-digit strings) across all genres
 
 def clean_features_csv(csv_path: Path, valid_audio: list[str], genres: list[str], out_path: Path) -> pd.DataFrame:
     "Cleans the features CSV file used in baseline model by dropping rows corresponding to invalid audio files."
@@ -72,17 +56,6 @@ def clean_features_csv(csv_path: Path, valid_audio: list[str], genres: list[str]
     print(cleaned_df["label"].value_counts().sort_index())
     
     return cleaned_df
-
-cleaned_csv = clean_features_csv(csv_path, valid_audio, genres, output_dir/"features_3_sec_cleaned.csv")
-
-# -- Check for exact feature duplicates in the cleaned CSV file --
-feature_cols = [c for c in cleaned_csv.columns if c not in ["filename", "length", "label", "track_id"]]
-
-# Exact feature match across different clips
-exact_dupes = cleaned_csv[cleaned_csv.duplicated(subset=feature_cols, keep=False)]
-print(f"Exact feature-identical rows: {len(exact_dupes)}")
-if len(exact_dupes) > 0:
-    print(exact_dupes[["filename", "track_id", "label"]].head(10))
 
 
 def build_dataset(audio_path: Path, genres: list[str], valid_audio: list[str]):
@@ -134,7 +107,6 @@ def build_dataset(audio_path: Path, genres: list[str], valid_audio: list[str]):
 
     return dataset, y_arr, track_arr, clips_name
 
-X_mel, mel_label, track_arr, clips_name = build_dataset(audio_path, genres, valid_audio)
 
 def save_spectograms(X_mel: np.ndarray, clips_name: list[str], output_dir: Path):
     "Saves each log-Mel spectrogram as a PNG image for visual inspection."
@@ -153,36 +125,6 @@ def save_spectograms(X_mel: np.ndarray, clips_name: list[str], output_dir: Path)
         plt.savefig(spec_dir/f"{clip_name}.png")
         plt.close()
 
-save_spectograms(X_mel, clips_name, output_dir)
-
-# Split training, validation and testing data 70/15/15; group shuffle split by track_id so all 10 clips of a given song stay together in a single split.
-gss_test = GroupShuffleSplit(n_splits=1, test_size=0.15, random_state=30) 
-train_val_idx, test_idx = next(gss_test.split(X_mel, mel_label, groups=track_arr))
-
-X_test, label_test, track_test = X_mel[test_idx], mel_label[test_idx], track_arr[test_idx]
-
-# Split remaining 85% into 70/15 so 0.15/0.85 ≈ 0.1765 of train_val
-gss_val = GroupShuffleSplit(n_splits=1, test_size=0.1765, random_state=30)
-train_idx, val_idx = next(gss_val.split(X_mel[train_val_idx], mel_label[train_val_idx], groups=track_arr[train_val_idx]))
-
-X_train, label_train, track_train = X_mel[train_val_idx][train_idx], mel_label[train_val_idx][train_idx], track_arr[train_val_idx][train_idx]
-X_val, label_val, track_val = X_mel[train_val_idx][val_idx], mel_label[train_val_idx][val_idx], track_arr[train_val_idx][val_idx]
-
-# Double check no song appears in more than one split
-assert set(track_train).isdisjoint(track_val)
-assert set(track_train).isdisjoint(track_arr[test_idx])
-assert set(track_val).isdisjoint(track_arr[test_idx])
-
-print(f"Clips -> Train: {len(X_train)} | Val: {len(X_val)} | Test: {len(X_test)}")
-
-# Save all splits to compressed file for reloading
-np.savez_compressed(
-    output_dir / "mel_splits.npz",
-    X_train=X_train, train_label=label_train, track_train=track_train,
-    X_val=X_val, val_label=label_val, track_val=track_val,
-    X_test=X_test, test_label=label_test, track_test=track_test,
-    genres=np.array(genres),
-)
 
 def get_mel_loaders(npz_path="processed_data/mel_splits.npz", batch_size=32, return_tracks=False):
 
@@ -206,13 +148,78 @@ def get_mel_loaders(npz_path="processed_data/mel_splits.npz", batch_size=32, ret
     
     return train_loader, val_loader, test_loader, genres
 
-# Check genre stratification in each split
-data = np.load(Path("processed_data/mel_splits.npz"))
-genres = data["genres"]
 
-for split_name, key in [("Train", "train_label"), ("Val", "val_label"), ("Test", "test_label")]:
-    label_split = data[key]
-    counts = np.bincount(label_split, minlength=len(genres))
-    print(f"\n{split_name} (total clips: {len(label_split)}):")
-    for g, c in zip(genres, counts):
-        print(f"  {g:10s}: {c}")
+if __name__ == '__main__':
+
+    genres = ['blues', 'classical', 'country', 'disco', 'hiphop', 'jazz', 'metal', 'pop', 'reggae', 'rock']
+    genre_to_index = {genre: idx for idx, genre in enumerate(genres)}
+
+    audio_path = Path("genres_original")
+    csv_path = Path("features_3_sec.csv")
+    output_dir = Path("processed_data")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    audio_duration = 30.0
+    clip_duration = 3.0
+    num_clips = 10 # Number of clips to extract from each audio file
+
+    np.random.seed(30) # For reproducibility
+    torch.manual_seed(30)
+
+    bad_audio = find_invalid_audio_files(audio_path, genres)
+    valid_audio = [f"{i:05d}" for i in range(100) if f"{i:05d}" not in bad_audio] # all the valid audio file numbers (5-digit strings) across all genres
+
+    cleaned_csv = clean_features_csv(csv_path, valid_audio, genres, output_dir/"features_3_sec_cleaned.csv")
+
+    # -- Check for exact feature duplicates in the cleaned CSV file --
+    feature_cols = [c for c in cleaned_csv.columns if c not in ["filename", "length", "label", "track_id"]]
+
+    # Exact feature match across different clips
+    exact_dupes = cleaned_csv[cleaned_csv.duplicated(subset=feature_cols, keep=False)]
+    print(f"Exact feature-identical rows: {len(exact_dupes)}")
+    if len(exact_dupes) > 0:
+        print(exact_dupes[["filename", "track_id", "label"]].head(10))
+
+    X_mel, mel_label, track_arr, clips_name = build_dataset(audio_path, genres, valid_audio)
+
+    save_spectograms(X_mel, clips_name, output_dir)
+
+    # Split training, validation and testing data 70/15/15; group shuffle split by track_id so all 10 clips of a given song stay together in a single split.
+    gss_test = GroupShuffleSplit(n_splits=1, test_size=0.15, random_state=30) 
+    train_val_idx, test_idx = next(gss_test.split(X_mel, mel_label, groups=track_arr))
+
+    X_test, label_test, track_test = X_mel[test_idx], mel_label[test_idx], track_arr[test_idx]
+
+    # Split remaining 85% into 70/15 so 0.15/0.85 ≈ 0.1765 of train_val
+    gss_val = GroupShuffleSplit(n_splits=1, test_size=0.1765, random_state=30)
+    train_idx, val_idx = next(gss_val.split(X_mel[train_val_idx], mel_label[train_val_idx], groups=track_arr[train_val_idx]))
+
+    X_train, label_train, track_train = X_mel[train_val_idx][train_idx], mel_label[train_val_idx][train_idx], track_arr[train_val_idx][train_idx]
+    X_val, label_val, track_val = X_mel[train_val_idx][val_idx], mel_label[train_val_idx][val_idx], track_arr[train_val_idx][val_idx]
+
+    # Double check no song appears in more than one split
+    assert set(track_train).isdisjoint(track_val)
+    assert set(track_train).isdisjoint(track_arr[test_idx])
+    assert set(track_val).isdisjoint(track_arr[test_idx])
+
+    print(f"Clips -> Train: {len(X_train)} | Val: {len(X_val)} | Test: {len(X_test)}")
+
+    # Save all splits to compressed file for reloading
+    np.savez_compressed(
+        output_dir / "mel_splits.npz",
+        X_train=X_train, train_label=label_train, track_train=track_train,
+        X_val=X_val, val_label=label_val, track_val=track_val,
+        X_test=X_test, test_label=label_test, track_test=track_test,
+        genres=np.array(genres),
+    )
+
+    # Check genre stratification in each split
+    data = np.load(Path("processed_data/mel_splits.npz"))
+    genres = data["genres"]
+
+    for split_name, key in [("Train", "train_label"), ("Val", "val_label"), ("Test", "test_label")]:
+        label_split = data[key]
+        counts = np.bincount(label_split, minlength=len(genres))
+        print(f"\n{split_name} (total clips: {len(label_split)}):")
+        for g, c in zip(genres, counts):
+            print(f"  {g:10s}: {c}")
