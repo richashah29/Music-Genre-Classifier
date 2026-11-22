@@ -56,7 +56,6 @@ def find_invalid_audio_files(audio_path: Path, genres: list[str]) -> set[str]:
 bad_audio = find_invalid_audio_files(audio_path, genres)
 valid_audio = [f"{i:05d}" for i in range(100) if f"{i:05d}" not in bad_audio] # all the valid audio file numbers (5-digit strings) across all genres
 
-
 def clean_features_csv(csv_path: Path, valid_audio: list[str], genres: list[str], out_path: Path) -> pd.DataFrame:
     "Cleans the features CSV file used in baseline model by dropping rows corresponding to invalid audio files."
 
@@ -76,7 +75,7 @@ def clean_features_csv(csv_path: Path, valid_audio: list[str], genres: list[str]
 
 cleaned_csv = clean_features_csv(csv_path, valid_audio, genres, output_dir/"features_3_sec_cleaned.csv")
 
-## -- Check for exact feature duplicates in the cleaned CSV file --
+# -- Check for exact feature duplicates in the cleaned CSV file --
 feature_cols = [c for c in cleaned_csv.columns if c not in ["filename", "length", "label", "track_id"]]
 
 # Exact feature match across different clips
@@ -166,32 +165,46 @@ X_test, label_test, track_test = X_mel[test_idx], mel_label[test_idx], track_arr
 gss_val = GroupShuffleSplit(n_splits=1, test_size=0.1765, random_state=30)
 train_idx, val_idx = next(gss_val.split(X_mel[train_val_idx], mel_label[train_val_idx], groups=track_arr[train_val_idx]))
 
-X_train, label_train = X_mel[train_val_idx][train_idx], mel_label[train_val_idx][train_idx]
-X_val, label_val = X_mel[train_val_idx][val_idx], mel_label[train_val_idx][val_idx]
+X_train, label_train, track_train = X_mel[train_val_idx][train_idx], mel_label[train_val_idx][train_idx], track_arr[train_val_idx][train_idx]
+X_val, label_val, track_val = X_mel[train_val_idx][val_idx], mel_label[train_val_idx][val_idx], track_arr[train_val_idx][val_idx]
 
 # Double check no song appears in more than one split
-assert set(track_arr[train_val_idx][train_idx]).isdisjoint(track_arr[train_val_idx][val_idx])
-assert set(track_arr[train_val_idx][train_idx]).isdisjoint(track_arr[test_idx])
-assert set(track_arr[train_val_idx][val_idx]).isdisjoint(track_arr[test_idx])
+assert set(track_train).isdisjoint(track_val)
+assert set(track_train).isdisjoint(track_arr[test_idx])
+assert set(track_val).isdisjoint(track_arr[test_idx])
 
 print(f"Clips -> Train: {len(X_train)} | Val: {len(X_val)} | Test: {len(X_test)}")
 
 # Save all splits to compressed file for reloading
 np.savez_compressed(
     output_dir / "mel_splits.npz",
-    X_train=X_train, train_label=label_train,
-    X_val=X_val, val_label=label_val,
-    X_test=X_test, test_label=label_test,
+    X_train=X_train, train_label=label_train, track_train=track_train,
+    X_val=X_val, val_label=label_val, track_val=track_val,
+    X_test=X_test, test_label=label_test, track_test=track_test,
     genres=np.array(genres),
 )
 
-train_dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(label_train, dtype=torch.long))
-val_dataset = TensorDataset(torch.tensor(X_val, dtype=torch.float32), torch.tensor(label_val, dtype=torch.long))
-test_dataset = TensorDataset(torch.tensor(X_test, dtype=torch.float32), torch.tensor(label_test, dtype=torch.long))
+def get_mel_loaders(npz_path="processed_data/mel_splits.npz", batch_size=32, return_tracks=False):
 
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
-test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+    data=np.load(Path(npz_path))
+
+    train_dataset = TensorDataset(torch.tensor(data["X_train"], dtype=torch.float32), torch.tensor(data["train_label"], dtype=torch.long))
+
+    val_dataset = TensorDataset(torch.tensor(data["X_val"], dtype=torch.float32), torch.tensor(data["val_label"], dtype=torch.long))
+
+    test_dataset = TensorDataset(torch.tensor(data["X_test"], dtype=torch.float32), torch.tensor(data["test_label"], dtype=torch.long))
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+    genres = data["genres"].tolist() if "genres" in data else None
+
+    if return_tracks:
+        tracks = {"train": data["track_train"], "val": data["track_val"], "test": data["track_test"]}
+        return train_loader, val_loader, test_loader, genres, tracks
+    
+    return train_loader, val_loader, test_loader, genres
 
 # Check genre stratification in each split
 data = np.load(Path("processed_data/mel_splits.npz"))
@@ -199,7 +212,7 @@ genres = data["genres"]
 
 for split_name, key in [("Train", "train_label"), ("Val", "val_label"), ("Test", "test_label")]:
     label_split = data[key]
-    counts = np.bincount(y_split, minlength=len(genres))
-    print(f"\n{split_name} (total clips: {len(y_split)}):")
+    counts = np.bincount(label_split, minlength=len(genres))
+    print(f"\n{split_name} (total clips: {len(label_split)}):")
     for g, c in zip(genres, counts):
         print(f"  {g:10s}: {c}")
