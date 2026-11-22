@@ -74,16 +74,16 @@ def clean_features_csv(csv_path: Path, valid_audio: list[str], genres: list[str]
     
     return cleaned_df
 
-# cleaned_csv = clean_features_csv(csv_path, valid_audio, genres, output_dir/"features_3_sec_cleaned.csv")
+cleaned_csv = clean_features_csv(csv_path, valid_audio, genres, output_dir/"features_3_sec_cleaned.csv")
 
 ## -- Check for exact feature duplicates in the cleaned CSV file --
-# feature_cols = [c for c in cleaned_csv.columns if c not in ["filename", "length", "label", "track_id"]]
+feature_cols = [c for c in cleaned_csv.columns if c not in ["filename", "length", "label", "track_id"]]
 
-# # Exact feature match across different clips
-# exact_dupes = cleaned_csv[cleaned_csv.duplicated(subset=feature_cols, keep=False)]
-# print(f"Exact feature-identical rows: {len(exact_dupes)}")
-# if len(exact_dupes) > 0:
-#     print(exact_dupes[["filename", "track_id", "label"]].head(10))
+# Exact feature match across different clips
+exact_dupes = cleaned_csv[cleaned_csv.duplicated(subset=feature_cols, keep=False)]
+print(f"Exact feature-identical rows: {len(exact_dupes)}")
+if len(exact_dupes) > 0:
+    print(exact_dupes[["filename", "track_id", "label"]].head(10))
 
 
 def build_dataset(audio_path: Path, genres: list[str], valid_audio: list[str]):
@@ -154,7 +154,7 @@ def save_spectograms(X_mel: np.ndarray, clips_name: list[str], output_dir: Path)
         plt.savefig(spec_dir/f"{clip_name}.png")
         plt.close()
 
-# save_spectograms(X_mel, clips_name, output_dir)
+save_spectograms(X_mel, clips_name, output_dir)
 
 # Split training, validation and testing data 70/15/15; group shuffle split by track_id so all 10 clips of a given song stay together in a single split.
 gss_test = GroupShuffleSplit(n_splits=1, test_size=0.15, random_state=30) 
